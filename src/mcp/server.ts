@@ -310,7 +310,23 @@ function buildServer(deps: McpDeps): McpServer {
         args: z.record(z.unknown()).optional().describe("arguments passed to the skill as ctx.args"),
       },
     },
-    async ({ name, args }) => {
+    async ({ name, args }, extra) => {
+      // Emit MCP progress so the Codex client's request timer keeps resetting
+      // for the whole build — otherwise a long, quiet run_skill looks dead and
+      // the client abandons the call even though the bot is still working.
+      const progressToken = (extra?._meta as { progressToken?: string | number } | undefined)?.progressToken;
+      let progress = 0;
+      const sendProgress = (message: string): void => {
+        if (progressToken === undefined) return;
+        void extra
+          .sendNotification({
+            method: "notifications/progress",
+            params: { progressToken, progress: ++progress, message },
+          })
+          .catch(() => {});
+      };
+      // Heartbeat in case the skill is silent for a long stretch (e.g. pathing).
+      const heartbeat = setInterval(() => sendProgress(`still working on ${name}…`), 20_000);
       try {
         const result = await gate.run(`skill ${name}`, (signal) =>
           runSkill(
@@ -318,12 +334,18 @@ function buildServer(deps: McpDeps): McpServer {
             { bot: agent.bot, nav, actions, creativeGive: cfg.dev.creativeGive },
             args ?? {},
             signal,
-            (msg) => agent.say(msg),
+            (msg) => {
+              agent.say(msg);
+              sendProgress(msg);
+            },
+            cfg.skills?.timeoutMs,
           ),
         );
         return result.ok ? ok(String(result.output)) : fail(new Error(result.output));
       } catch (err) {
         return fail(err);
+      } finally {
+        clearInterval(heartbeat);
       }
     },
   );

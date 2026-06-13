@@ -30,6 +30,13 @@ const ConfigSchema = z.object({
   mcp: z.object({
     port: z.number().int(),
   }),
+  skills: z
+    .object({
+      /** Max wall-clock time for one run_skill execution (ms). Big builds in
+       *  survival (gather + place hundreds of blocks) need lots of headroom. */
+      timeoutMs: z.number().int().positive(),
+    })
+    .optional(),
   codex: z.object({
     command: z.string(),
     sandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]),

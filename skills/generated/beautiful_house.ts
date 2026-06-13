@@ -147,6 +147,7 @@ export async function run(ctx: SkillContext): Promise<string> {
     placements.push({ pos: new Vec3(minX + 4, y, minZ + 4), block: "cobbled_deepslate" });
   }
 
+  await clearConflicts(ctx, placements);
   const summary = await buildStructure(ctx, placements);
   return `house built: ${summary}`;
 }
@@ -248,4 +249,18 @@ function ringOffsets(radius: number, step: number): Array<[number, number]> {
     out.push([-radius, dz], [radius, dz]);
   }
   return out;
+}
+
+async function clearConflicts(ctx: SkillContext, placements: Placement[]): Promise<void> {
+  const seen = new Set<string>();
+  for (const placement of placements) {
+    if (ctx.signal.aborted) throw new Error("build aborted");
+    const key = `${placement.pos.x},${placement.pos.y},${placement.pos.z}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const existing = ctx.bot.blockAt(placement.pos);
+    if (!existing || isClear(existing) || existing.name === placement.block) continue;
+    await ctx.actions.digBlockAt(placement.pos.x, placement.pos.y, placement.pos.z, ctx.signal).catch(() => {});
+  }
 }

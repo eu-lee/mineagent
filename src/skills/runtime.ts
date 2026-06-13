@@ -28,7 +28,9 @@ export type SkillModule = {
 const SKILLS_DIR = path.join(repoRoot, "skills");
 /** Where agents write their own skills (kept out of the curated skills/ root). */
 const GENERATED_DIR = path.join(SKILLS_DIR, "generated");
-const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+/** Generous default — large builds (gather materials, place hundreds of
+ *  blocks) routinely run many minutes. Override via config.skills.timeoutMs. */
+const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 
 export interface SkillRunResult {
   ok: boolean;

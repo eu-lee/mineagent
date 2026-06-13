@@ -19,6 +19,9 @@
   "mcp": {
     "port": 7654
   },
+  "skills": {
+    "timeoutMs": 1200000
+  },
   "codex": {
     "command": "codex",
     "sandbox": "danger-full-access"

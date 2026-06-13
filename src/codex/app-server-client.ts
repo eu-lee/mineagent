@@ -37,6 +37,9 @@ export interface CodexClientOptions {
   mcpUrl?: string;
   /** Per-agent personality, seeded as developer instructions on its thread. */
   developerInstructions?: string;
+  /** Override Codex's per-MCP-tool-call timeout (default 120s) so long
+   *  run_skill builds aren't killed by the brain mid-task. Seconds. */
+  mcpToolTimeoutSec?: number;
   /** Label for logs. */
   name?: string;
 }
@@ -60,6 +63,12 @@ export class CodexAppServerClient extends EventEmitter {
     // -c docs), which is exactly what we want.
     const args = ["app-server"];
     if (this.opts.mcpUrl) args.push("-c", `mcp_servers.mineagent.url=${this.opts.mcpUrl}`);
+    // Codex's default per-tool-call timeout is 120s — far too short for long
+    // builds. Raise it (RawMcpServerConfig.tool_timeout_sec) so the brain waits
+    // out a multi-minute run_skill instead of reporting a phantom timeout.
+    if (this.opts.mcpToolTimeoutSec) {
+      args.push("-c", `mcp_servers.mineagent.tool_timeout_sec=${this.opts.mcpToolTimeoutSec}`);
+    }
 
     this.proc = spawn(this.opts.command, args, {
       stdio: ["pipe", "pipe", "pipe"],

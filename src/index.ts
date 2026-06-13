@@ -13,6 +13,12 @@ const cfg = loadConfig();
 const names = agentNames(cfg);
 const allNames = new Set(names.map((n) => n.toLowerCase()));
 
+// Codex must wait out a long run_skill build, so give its per-tool-call timeout
+// headroom beyond our own skill cap — our cleaner "skill timed out" message
+// should fire first if anything truly hangs.
+const skillTimeoutMs = cfg.skills?.timeoutMs ?? 20 * 60_000;
+const mcpToolTimeoutSec = Math.ceil(skillTimeoutMs / 1000) + 120;
+
 interface AgentStack {
   name: string;
   bot: AgentBot;
@@ -41,6 +47,7 @@ for (const name of names) {
     sandbox: cfg.codex.sandbox,
     name,
     mcpUrl: `http://127.0.0.1:${cfg.mcp.port}/mcp/${name}`,
+    mcpToolTimeoutSec,
     developerInstructions: [
       cfg.agents.personality,
       `Your in-game name is "${name}", one of several bot characters in this world. ` +
