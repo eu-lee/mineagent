@@ -126,11 +126,13 @@ export class CodexAppServerClient extends EventEmitter {
     return res.thread.id;
   }
 
-  /** Send a user message as a new turn; events stream via "event". */
-  async sendUserMessage(threadId: string, text: string): Promise<void> {
+  /** Send a user message as a new turn; events stream via "event".
+   *  `effort` sets per-turn reasoning effort (snappy for chat, deep for builds). */
+  async sendUserMessage(threadId: string, text: string, effort?: string): Promise<void> {
     await this.request("turn/start", {
       threadId,
       input: [{ type: "text", text, text_elements: [] }],
+      ...(effort ? { effort } : {}),
     });
   }
 

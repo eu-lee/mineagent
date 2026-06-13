@@ -19,6 +19,15 @@ const ConfigSchema = z.object({
     personality: z.string(),
     /** Model for the agents (null = codex CLI default). */
     model: z.string().nullable(),
+    /** Per-turn reasoning effort. `simple` keeps chat/quick commands snappy;
+     *  `complex` is used for builds and hard tasks (auto-detected per request).
+     *  Values: "minimal" | "low" | "medium" | "high" | "xhigh". */
+    reasoning: z
+      .object({
+        simple: z.string(),
+        complex: z.string(),
+      })
+      .optional(),
     /** Auto-eat when hungry so health regenerates (default true). */
     autoEat: z.boolean().optional(),
   }),

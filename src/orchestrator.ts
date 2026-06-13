@@ -31,7 +31,7 @@ export class Orchestrator {
   private survival: Survival;
   private sessions = new Map<string, Session>(); // per player
   /** The task currently being executed, so we can resume it after a death. */
-  private activeTask: { username: string; request: string } | null = null;
+  private activeTask: { username: string; request: string; effort: string } | null = null;
   private deathResumes = 0;
 
   constructor(
@@ -95,6 +95,7 @@ export class Orchestrator {
     await this.codex.sendUserMessage(
       session.threadId,
       this.framePlayerMessage(task.username, task.request, "you just DIED and respawned — resume this task from your current state"),
+      task.effort,
     );
   }
 
@@ -173,16 +174,43 @@ export class Orchestrator {
       }
     }
 
+    const effort = this.effortFor(request);
     session.turnActive = true;
     session.lastUsed = Date.now();
-    this.activeTask = { username, request };
+    this.activeTask = { username, request, effort };
     this.deathResumes = 0;
-    console.log(`[${this.agent.username}] <${username}> ${request}`);
+    // Acknowledge instantly so the player hears something now, instead of
+    // waiting for the brain to finish reasoning (and often only chatting after
+    // it has already run the action).
+    this.agent.say(this.quickAck());
+    console.log(`[${this.agent.username}] <${username}> [${effort}] ${request}`);
 
     await this.codex.sendUserMessage(
       session.threadId,
       this.framePlayerMessage(username, request, "in Minecraft chat, addressed to you — act on it"),
+      effort,
     );
+  }
+
+  /**
+   * Pick reasoning effort for a request: deep thinking only for builds and hard
+   * tasks, snappy "low" for ordinary chat/commands. Effort is locked when a turn
+   * starts (Codex can't deepen a turn mid-flight), so we infer it from the ask.
+   */
+  private effortFor(request: string): string {
+    const r = this.cfg.agents.reasoning;
+    const simple = r?.simple ?? "low";
+    const complex = r?.complex ?? "high";
+    const COMPLEX =
+      /\b(build|rebuild|construct|design|architect|blueprint|tower|house|castle|fort|fortress|mansion|cabin|base|pyramid|statue|sculpture|monument|bridge|dome|maze|labyrinth|arena|stadium|wall|rampart|moat|farm|redstone|contraption|mechanism|machine|circuit|plan|strateg|optimi|calculate|complex|elaborate|intricate|skill)\b/i;
+    if (COMPLEX.test(request) || request.length > 200) return complex;
+    return simple;
+  }
+
+  /** A short, varied "heard you" so the player gets feedback immediately. */
+  private quickAck(): string {
+    const acks = ["on it", "got it", "sure thing", "okay!", "yep, on it", "👍 working on it"];
+    return acks[Math.floor(Math.random() * acks.length)];
   }
 
   /** Frame a player message with a context tag + fresh world snapshot. */

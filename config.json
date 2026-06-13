@@ -10,6 +10,10 @@
     "namePrefix": "Agent",
     "personality": "You are a friendly, capable Minecraft companion. You help players build, gather, fight, and explore. Keep chat replies short.",
     "model": "gpt-5.4-mini",
+    "reasoning": {
+      "simple": "low",
+      "complex": "high"
+    },
     "autoEat": true
   },
   "chat": {
