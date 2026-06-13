@@ -17,13 +17,15 @@ export type ChatHandler = (cmd: ChatCommand) => void;
  */
 export class AgentBot {
   bot!: Bot;
+  readonly username: string;
   private cfg: Config;
   private chatHandlers: ChatHandler[] = [];
   private stopped = false;
   private reconnectDelayMs = 3_000;
 
-  constructor(cfg: Config) {
+  constructor(cfg: Config, username: string) {
     this.cfg = cfg;
+    this.username = username;
   }
 
   async start(): Promise<void> {
@@ -55,7 +57,7 @@ export class AgentBot {
       host: mc.host,
       port: mc.port,
       version: mc.version,
-      username: mc.username,
+      username: this.username,
       auth: mc.auth === "microsoft" ? "microsoft" : "offline",
     });
     this.bot = bot;

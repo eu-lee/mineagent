@@ -3,11 +3,15 @@
     "host": "127.0.0.1",
     "port": 25565,
     "version": "1.21.4",
-    "username": "agent",
     "auth": "offline"
   },
+  "agents": {
+    "count": 3,
+    "namePrefix": "Agent",
+    "personality": "You are a friendly, capable Minecraft companion. You help players build, gather, fight, and explore. Keep chat replies short.",
+    "model": null
+  },
   "chat": {
-    "mention": "@agent",
     "whitelist": [],
     "maxChatLineLength": 240
   },
@@ -16,7 +20,6 @@
   },
   "codex": {
     "command": "codex",
-    "model": null,
     "sandbox": "workspace-write"
   },
   "dev": {

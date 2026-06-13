@@ -14,8 +14,10 @@ interface Session {
 }
 
 /**
- * Wires Minecraft chat to Codex: "@agent <request>" from a whitelisted player
- * becomes a user turn; agent messages stream back into chat.
+ * Wires one agent's Minecraft chat to its own Codex brain: "@<name> <request>"
+ * from a whitelisted player becomes a user turn; agent messages stream back to
+ * chat. Each agent is independent — it answers only to its own name and ignores
+ * chat from the other agent bots (so they don't command each other in loops).
  */
 export class Orchestrator {
   private cfg: Config;
@@ -23,14 +25,25 @@ export class Orchestrator {
   private codex: CodexAppServerClient;
   private gate: ActionGate;
   private nav: Navigator;
+  private mention: string; // "@<name>" lowercased
+  private otherAgents: Set<string>; // lowercased usernames to ignore
   private sessions = new Map<string, Session>(); // per player
 
-  constructor(cfg: Config, agent: AgentBot, codex: CodexAppServerClient, gate: ActionGate, nav: Navigator) {
+  constructor(
+    cfg: Config,
+    agent: AgentBot,
+    codex: CodexAppServerClient,
+    gate: ActionGate,
+    nav: Navigator,
+    otherAgents: Set<string>,
+  ) {
     this.cfg = cfg;
     this.agent = agent;
     this.codex = codex;
     this.gate = gate;
     this.nav = nav;
+    this.mention = `@${agent.username.toLowerCase()}`;
+    this.otherAgents = otherAgents;
   }
 
   start(): void {
@@ -40,25 +53,27 @@ export class Orchestrator {
 
     this.agent.onChat(({ username, message }) => {
       void this.onChat(username, message).catch((err) => {
-        console.error("[orchestrator] chat handling failed:", err);
+        console.error(`[${this.agent.username}] chat handling failed:`, err);
         this.agent.say(`${username}: something went wrong (${err instanceof Error ? err.message : err})`);
       });
     });
   }
 
   private async onChat(username: string, message: string): Promise<void> {
-    const mention = this.cfg.chat.mention.toLowerCase();
-    if (!message.toLowerCase().startsWith(mention)) return;
+    // Ignore the other agent bots so they don't take orders from each other.
+    if (this.otherAgents.has(username.toLowerCase())) return;
+
+    if (!message.toLowerCase().startsWith(this.mention)) return;
 
     const whitelist = this.cfg.chat.whitelist;
     if (whitelist.length > 0 && !whitelist.includes(username)) {
-      console.log(`[orchestrator] ignoring non-whitelisted player ${username}`);
+      console.log(`[${this.agent.username}] ignoring non-whitelisted player ${username}`);
       return;
     }
 
-    const request = message.slice(mention.length).trim();
+    const request = message.slice(this.mention.length).trim();
     if (!request) {
-      this.agent.say(`${username}: yes? (say "${this.cfg.chat.mention} <what you want>")`);
+      this.agent.say(`${username}: yes? (say "@${this.agent.username} <what you want>")`);
       return;
     }
 
@@ -74,30 +89,53 @@ export class Orchestrator {
     }
 
     const session = await this.getSession(username);
+
+    // If a turn is already running, fold the new message into it (steer) rather
+    // than blocking — lets the player add info/redirect mid-task.
     if (session.turnActive) {
-      this.agent.say(
-        `${username}: I'm still working${this.gate.busyWith ? ` (${this.gate.busyWith})` : ""} — say "${this.cfg.chat.mention} stop" to interrupt.`,
-      );
-      return;
+      try {
+        const steered = await this.codex.steer(
+          session.threadId,
+          this.framePlayerMessage(username, request, "added this while you're still working — work it into what you're doing"),
+        );
+        if (steered) {
+          session.lastUsed = Date.now();
+          console.log(`[${this.agent.username}] <${username}> (steer) ${request}`);
+          this.agent.say(`${username}: got it — folding that in.`);
+          return;
+        }
+        session.turnActive = false; // turn just finished; fall through to a fresh one
+      } catch (err) {
+        console.error(`[${this.agent.username}] steer failed:`, err);
+        this.agent.say(`${username}: I'm mid-task and couldn't fold that in — say "@${this.agent.username} stop" to redirect me.`);
+        return;
+      }
     }
 
     session.turnActive = true;
     session.lastUsed = Date.now();
-    console.log(`[orchestrator] <${username}> ${request}`);
+    console.log(`[${this.agent.username}] <${username}> ${request}`);
 
-    const turn = [
-      `[message from player "${username}" in Minecraft chat]`,
+    await this.codex.sendUserMessage(
+      session.threadId,
+      this.framePlayerMessage(username, request, "in Minecraft chat, addressed to you — act on it"),
+    );
+  }
+
+  /** Frame a player message with a context tag + fresh world snapshot. */
+  private framePlayerMessage(username: string, request: string, tag: string): string {
+    return [
+      `[message from player "${username}" ${tag}]`,
       request,
       "",
       "[current world state]",
       observe(this.agent.bot),
     ].join("\n");
-
-    await this.codex.sendUserMessage(session.threadId, turn);
   }
 
   private onCodexEvent(threadId: string, msg: { type: string; [k: string]: unknown }): void {
     const session = this.findSession(threadId);
+    if (!session) return; // not this agent's thread
 
     switch (msg.type) {
       case "agent_message": {
@@ -106,15 +144,13 @@ export class Orchestrator {
         break;
       }
       case "turn_complete": {
-        if (session) {
-          session.session.turnActive = false;
-          session.session.lastUsed = Date.now();
-        }
+        session.session.turnActive = false;
+        session.session.lastUsed = Date.now();
         break;
       }
       case "error": {
-        console.error("[codex] error event:", msg);
-        if (session) session.session.turnActive = false;
+        console.error(`[${this.agent.username}] codex error:`, msg);
+        session.session.turnActive = false;
         this.agent.say(`brain error: ${(msg.message as string) ?? "unknown"}`);
         break;
       }

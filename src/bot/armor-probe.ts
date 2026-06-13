@@ -1,13 +1,13 @@
 /** Direct test of armor equipping (no Codex). Joins, prints inventory + slots,
  *  tries equipArmor(), then reads back. Stop other instances first.
  *  Usage: $env:MINEAGENT_PORT="NNNNN"; npx tsx src/bot/armor-probe.ts */
-import { loadConfig } from "../config.js";
+import { loadConfig, agentNames } from "../config.js";
 import { AgentBot } from "./agent-bot.js";
 import { Navigator } from "./navigator.js";
 import { Actions } from "./actions.js";
 
 const cfg = loadConfig();
-const agent = new AgentBot(cfg);
+const agent = new AgentBot(cfg, agentNames(cfg)[0]);
 await agent.start();
 const bot = agent.bot;
 const nav = new Navigator(bot);

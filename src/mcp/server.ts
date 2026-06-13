@@ -108,6 +108,16 @@ function buildServer(deps: McpDeps): McpServer {
   );
 
   server.registerTool(
+    "attack",
+    {
+      description:
+        "Attack a nearby creature by name until it dies (or you stop). Approaches, equips the best weapon, and swings. E.g. attack 'zombie' to fight, 'pig' to hunt for food, or 'nearest' for the closest mob.",
+      inputSchema: { target: z.string().describe("mob name e.g. 'zombie', 'cow', or 'nearest'") },
+    },
+    async ({ target }) => action(deps, `attack ${target}`, (s) => actions.attack(target, s))(),
+  );
+
+  server.registerTool(
     "goto_block",
     {
       description: "Find the nearest block of a type (e.g. 'oak_log', 'crafting_table') and walk next to it.",
@@ -142,6 +152,19 @@ function buildServer(deps: McpDeps): McpServer {
       inputSchema: { item: z.string(), x: z.number(), y: z.number(), z: z.number() },
     },
     async ({ item, x, y, z }) => action(deps, `place ${item}`, (s) => actions.placeBlockAt(item, x, y, z, s))(),
+  );
+
+  server.registerTool(
+    "pillar_up",
+    {
+      description:
+        "Pillar straight up by placing blocks under your own feet (hop-and-place). Use this to gain height or when a block needs to go in the cell you're standing in — normal place_block can't do that.",
+      inputSchema: {
+        item: z.string().describe("block to place, e.g. 'dirt', 'cobblestone'"),
+        count: z.number().int().min(1).max(64).optional().describe("how many blocks high (default 1)"),
+      },
+    },
+    async ({ item, count }) => action(deps, `pillar_up ${item}`, (s) => actions.pillarUp(item, count ?? 1, s))(),
   );
 
   server.registerTool(
@@ -200,6 +223,43 @@ function buildServer(deps: McpDeps): McpServer {
     "inventory",
     { description: "List inventory contents.", inputSchema: {} },
     async () => ok(actions.inventory()),
+  );
+
+  server.registerTool(
+    "list_chest",
+    {
+      description: "List the contents of a container (chest/barrel/...) at coordinates.",
+      inputSchema: { x: z.number(), y: z.number(), z: z.number() },
+    },
+    async ({ x, y, z }) => action(deps, `list_chest (${x},${y},${z})`, (s) => actions.listChest(x, y, z, s))(),
+  );
+
+  server.registerTool(
+    "deposit",
+    {
+      description: "Put items into a container at coordinates. Omit `item` to deposit everything.",
+      inputSchema: {
+        x: z.number(), y: z.number(), z: z.number(),
+        item: z.string().optional(),
+        count: z.number().int().min(1).optional(),
+      },
+    },
+    async ({ x, y, z, item, count }) =>
+      action(deps, `deposit ${item ?? "all"}`, (s) => actions.depositItems(x, y, z, item, count, s))(),
+  );
+
+  server.registerTool(
+    "withdraw",
+    {
+      description: "Take items from a container at coordinates. Omit `count` to take all of that item.",
+      inputSchema: {
+        x: z.number(), y: z.number(), z: z.number(),
+        item: z.string(),
+        count: z.number().int().min(1).optional(),
+      },
+    },
+    async ({ x, y, z, item, count }) =>
+      action(deps, `withdraw ${item}`, (s) => actions.withdrawItems(x, y, z, item, count, s))(),
   );
 
   server.registerTool(
@@ -262,14 +322,22 @@ function buildServer(deps: McpDeps): McpServer {
 }
 
 /**
- * Streamable-HTTP MCP endpoint at http://127.0.0.1:<port>/mcp (stateless mode:
- * a fresh server+transport per request, all closing over the same live bot).
+ * One streamable-HTTP MCP server hosting a route per agent at
+ * http://127.0.0.1:<port>/mcp/<agentName> (stateless mode: a fresh
+ * server+transport per request, each closing over that agent's live bot).
+ * Each agent's codex app-server is pointed at its own route, so its tools only
+ * ever act on its own bot.
  */
-export function startMcpServer(deps: McpDeps): Promise<number> {
+export function startMcpServer(agents: Map<string, McpDeps>, port: number): Promise<number> {
   const app = express();
   app.use(express.json());
 
-  app.post("/mcp", async (req, res) => {
+  app.post("/mcp/:agent", async (req, res) => {
+    const deps = agents.get(req.params.agent);
+    if (!deps) {
+      res.status(404).json({ error: `unknown agent "${req.params.agent}"` });
+      return;
+    }
     try {
       const server = buildServer(deps);
       const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
@@ -286,14 +354,14 @@ export function startMcpServer(deps: McpDeps): Promise<number> {
   });
 
   // Stateless mode: no GET/DELETE session endpoints needed.
-  app.get("/mcp", (_req, res) => res.status(405).end());
-  app.delete("/mcp", (_req, res) => res.status(405).end());
+  app.get("/mcp/:agent", (_req, res) => res.status(405).end());
+  app.delete("/mcp/:agent", (_req, res) => res.status(405).end());
 
   return new Promise((resolve) => {
-    const listener = app.listen(deps.cfg.mcp.port, "127.0.0.1", () => {
-      const port = (listener.address() as { port: number }).port;
-      console.log(`[mcp] listening on http://127.0.0.1:${port}/mcp`);
-      resolve(port);
+    const listener = app.listen(port, "127.0.0.1", () => {
+      const actual = (listener.address() as { port: number }).port;
+      console.log(`[mcp] listening on http://127.0.0.1:${actual}/mcp/<agent> for: ${[...agents.keys()].join(", ")}`);
+      resolve(actual);
     });
   });
 }

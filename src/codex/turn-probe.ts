@@ -2,7 +2,7 @@
  *  MCP tool. Logs every server-request + event so we can see approval/elicitation
  *  behavior and the tool result. Joins as "agent" — stop any other instance first.
  *  Usage: $env:MINEAGENT_PORT="NNNNN"; npx tsx src/codex/turn-probe.ts */
-import { loadConfig, repoRoot } from "../config.js";
+import { loadConfig, repoRoot, agentNames } from "../config.js";
 import { AgentBot } from "../bot/agent-bot.js";
 import { Navigator } from "../bot/navigator.js";
 import { Actions } from "../bot/actions.js";
@@ -11,14 +11,22 @@ import { startMcpServer } from "../mcp/server.js";
 import { CodexAppServerClient } from "./app-server-client.js";
 
 const cfg = loadConfig();
-const agent = new AgentBot(cfg);
+const name = agentNames(cfg)[0];
+const agent = new AgentBot(cfg, name);
 await agent.start();
 const nav = new Navigator(agent.bot);
 const actions = new Actions(agent.bot, nav);
 const gate = new ActionGate();
-await startMcpServer({ agent, actions, nav, gate, cfg });
 
-const codex = new CodexAppServerClient({ command: cfg.codex.command, cwd: repoRoot, model: cfg.codex.model, sandbox: cfg.codex.sandbox });
+await startMcpServer(new Map([[name, { agent, actions, nav, gate, cfg }]]), cfg.mcp.port);
+const codex = new CodexAppServerClient({
+  command: cfg.codex.command,
+  cwd: repoRoot,
+  model: cfg.agents.model,
+  sandbox: cfg.codex.sandbox,
+  name,
+  mcpUrl: `http://127.0.0.1:${cfg.mcp.port}/mcp/${name}`,
+});
 await codex.start();
 console.log("[probe] codex initialized");
 

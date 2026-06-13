@@ -32,6 +32,13 @@ export interface CodexClientOptions {
   cwd: string; // workspace the agent edits (the repo, for skill files)
   model?: string | null;
   sandbox: "read-only" | "workspace-write" | "danger-full-access";
+  /** This agent's MCP endpoint; injected so the app-server's "mineagent" server
+   *  points at the route bound to this agent's bot. */
+  mcpUrl?: string;
+  /** Per-agent personality, seeded as developer instructions on its thread. */
+  developerInstructions?: string;
+  /** Label for logs. */
+  name?: string;
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -48,7 +55,13 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   async start(): Promise<void> {
-    this.proc = spawn(this.opts.command, ["app-server"], {
+    // Point this app-server's "mineagent" MCP server at this agent's route. The
+    // url isn't valid TOML, so codex stores it as a literal string (per its
+    // -c docs), which is exactly what we want.
+    const args = ["app-server"];
+    if (this.opts.mcpUrl) args.push("-c", `mcp_servers.mineagent.url=${this.opts.mcpUrl}`);
+
+    this.proc = spawn(this.opts.command, args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32", // codex is a .cmd shim on Windows npm installs
     });
@@ -82,14 +95,25 @@ export class CodexAppServerClient extends EventEmitter {
   // Public API (used by the orchestrator)
   // ---------------------------------------------------------------------
 
-  /** Start a thread (one per player session); returns its id. */
+  /**
+   * Start a thread (one per player session, or per subagent role); returns its
+   * id. `modelOverride` lets callers pick a per-role model (e.g. a cheaper model
+   * for worker subagents); omit to use the configured default. Logs the model
+   * the server actually resolved.
+   */
   async startThread(): Promise<string> {
+    const model = this.opts.model;
     const res = (await this.request("thread/start", {
       cwd: this.opts.cwd,
       sandbox: this.opts.sandbox,
       approvalPolicy: "never",
-      ...(this.opts.model ? { model: this.opts.model } : {}),
-    })) as { thread: { id: string } };
+      ...(model ? { model } : {}),
+      ...(this.opts.developerInstructions ? { developerInstructions: this.opts.developerInstructions } : {}),
+    })) as { thread: { id: string }; model?: string; reasoningEffort?: string | null };
+    console.log(
+      `[codex] ${this.opts.name ?? "agent"}: thread ${res.thread.id} — model="${res.model ?? model ?? "(codex default)"}"` +
+        (res.reasoningEffort ? `, effort=${res.reasoningEffort}` : ""),
+    );
     return res.thread.id;
   }
 
@@ -99,6 +123,24 @@ export class CodexAppServerClient extends EventEmitter {
       threadId,
       input: [{ type: "text", text, text_elements: [] }],
     });
+  }
+
+  /**
+   * Steer the in-flight turn on a thread: inject a new player message into the
+   * turn that's already running so the agent adapts mid-task ("I gave you doors,
+   * use them") instead of the player having to stop and re-issue.
+   * Returns false if no turn is currently active (caller should start a fresh
+   * turn instead). Throws if the steer request itself fails.
+   */
+  async steer(threadId: string, text: string): Promise<boolean> {
+    const turnId = this.activeTurns.get(threadId);
+    if (!turnId) return false;
+    await this.request("turn/steer", {
+      threadId,
+      input: [{ type: "text", text, text_elements: [] }],
+      expectedTurnId: turnId,
+    });
+    return true;
   }
 
   /** Interrupt the active turn on a thread, if any. */

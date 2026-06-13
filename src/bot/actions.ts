@@ -2,7 +2,7 @@ import type { Bot } from "mineflayer";
 import type { Block } from "prismarine-block";
 import type { Entity } from "prismarine-entity";
 import { Vec3 } from "vec3";
-import { Navigator, NavigationError } from "./navigator.js";
+import { Navigator, NavigationError, NavigationAborted } from "./navigator.js";
 
 export class ActionError extends Error {}
 
@@ -51,6 +51,49 @@ export class Actions {
     const label = entityLabel(target);
     const res = await this.nav.gotoEntity(target, range, signal);
     return `reached ${label} at ${fmtVec(res.reached)} (${res.distanceToGoal.toFixed(1)} blocks away) in ${(res.elapsedMs / 1000).toFixed(1)}s`;
+  }
+
+  /**
+   * Attack a nearby creature by name until it dies (or the signal aborts).
+   * Approaches into melee reach, equips the best weapon, then swings on the
+   * attack cooldown, re-approaching as the target flees. Pass "nearest" to
+   * target the closest creature.
+   */
+  async attack(name: string, signal?: AbortSignal): Promise<string> {
+    const wantNearest = /^(nearest|closest|any)$/i.test(name.trim());
+    const target = wantNearest
+      ? this.bot.nearestEntity((e) => isCreature(e))
+      : this.findEntity(name);
+    if (!target) throw new ActionError(`no ${wantNearest ? "creature" : name} to attack nearby`);
+
+    const label = entityLabel(target);
+    await this.equipWeapon();
+
+    let hits = 0;
+    let misses = 0;
+    while (target.isValid && !signal?.aborted) {
+      const dist = this.bot.entity.position.distanceTo(target.position);
+      if (dist > 3.5) {
+        try {
+          await this.nav.gotoEntity(target, 2, signal);
+        } catch (err) {
+          if (err instanceof NavigationAborted) break;
+          if (++misses >= 3) {
+            return `couldn't reach ${label} to attack (gave up after ${hits} hit(s))`;
+          }
+          continue;
+        }
+        continue;
+      }
+      misses = 0;
+      await this.bot.lookAt(target.position.offset(0, 1, 0), true).catch(() => {});
+      this.bot.attack(target);
+      hits++;
+      await sleep(600); // melee cooldown
+    }
+
+    const outcome = !target.isValid ? "killed" : signal?.aborted ? "stopped" : "done";
+    return `attacked ${label} — ${hits} hit(s), ${outcome}`;
   }
 
   /** Find the nearest block of a type and walk adjacent to it. */
@@ -102,6 +145,13 @@ export class Actions {
    */
   async placeBlockAt(itemName: string, x: number, y: number, z: number, signal?: AbortSignal): Promise<string> {
     const target = new Vec3(x, y, z);
+
+    // Hardcoded path for the awkward "block under my feet" case: bot.placeBlock
+    // can't place into the cell the bot occupies, so hop up and place beneath.
+    if (target.equals(this.bot.entity.position.floored())) {
+      return this.placeUnderFeet(itemName, signal);
+    }
+
     const existing = this.bot.blockAt(target);
     if (existing && existing.name !== "air" && existing.name !== "water" && !existing.name.includes("grass")) {
       throw new ActionError(`(${x}, ${y}, ${z}) is already occupied by ${existing.name}`);
@@ -132,6 +182,39 @@ export class Actions {
     await this.bot.equip(item, "hand");
     await this.bot.placeBlock(refBlock, face);
     return `placed ${itemName} at (${x}, ${y}, ${z})`;
+  }
+
+  /**
+   * Place a block in the cell the bot is standing in by hopping up onto it
+   * ("pillar up"). This is the hardcoded handling for placing a block under the
+   * bot's feet, which `bot.placeBlock` cannot do directly because the bot's body
+   * occupies the target cell — we jump and place at the apex when the cell is
+   * momentarily clear, retrying on each hop until it lands.
+   */
+  async placeUnderFeet(itemName: string, signal?: AbortSignal): Promise<string> {
+    const item = this.bot.inventory.items().find((i) => i.name === itemName);
+    if (!item) throw new ActionError(`no ${itemName} in inventory`);
+
+    const ref = this.bot.blockAt(this.bot.entity.position.offset(0, -1, 0));
+    if (!ref || ref.boundingBox !== "block") {
+      throw new ActionError("nothing solid under my feet to pillar up from");
+    }
+
+    await this.bot.equip(item, "hand");
+    await this.bot.look(this.bot.entity.yaw, -Math.PI / 2, true); // look straight down
+    await this.hopAndPlace(ref, new Vec3(0, 1, 0), signal);
+    return `placed ${itemName} under my feet (pillared up)`;
+  }
+
+  /** Pillar straight up `count` blocks, placing one block under the feet each hop. */
+  async pillarUp(itemName: string, count = 1, signal?: AbortSignal): Promise<string> {
+    let done = 0;
+    for (let i = 0; i < count; i++) {
+      if (signal?.aborted) break;
+      await this.placeUnderFeet(itemName, signal);
+      done++;
+    }
+    return `pillared up ${done}/${count} block(s) with ${itemName}`;
   }
 
   async craft(itemName: string, count = 1, signal?: AbortSignal): Promise<string> {
@@ -213,6 +296,61 @@ export class Actions {
     return `dropped ${count ?? item.count}x ${itemName}`;
   }
 
+  /** List the contents of a container (chest/barrel/...) at coords. */
+  async listChest(x: number, y: number, z: number, signal?: AbortSignal): Promise<string> {
+    const chest = await this.openChestAt(x, y, z, signal);
+    try {
+      const items = chest.containerItems();
+      if (items.length === 0) return `container at (${x}, ${y}, ${z}) is empty`;
+      const counts = new Map<string, number>();
+      for (const it of items) counts.set(it.name, (counts.get(it.name) ?? 0) + it.count);
+      return "container: " + [...counts.entries()].map(([n, c]) => `${c}x ${n}`).join(", ");
+    } finally {
+      chest.close();
+    }
+  }
+
+  /** Deposit items into a container. Omit itemName to dump everything. */
+  async depositItems(x: number, y: number, z: number, itemName?: string, count?: number, signal?: AbortSignal): Promise<string> {
+    const chest = await this.openChestAt(x, y, z, signal);
+    try {
+      const items = itemName
+        ? this.bot.inventory.items().filter((i) => i.name === itemName)
+        : this.bot.inventory.items();
+      if (items.length === 0) throw new ActionError(itemName ? `no ${itemName} to deposit` : "nothing to deposit");
+      let moved = 0;
+      for (const it of items) {
+        const amount = itemName && count != null ? Math.min(count - moved, it.count) : it.count;
+        if (amount <= 0) break;
+        await chest.deposit(it.type, null, amount);
+        moved += amount;
+      }
+      return `deposited ${moved}${itemName ? `x ${itemName}` : " item(s)"}`;
+    } finally {
+      chest.close();
+    }
+  }
+
+  /** Withdraw items from a container. Omit count to take all of that item. */
+  async withdrawItems(x: number, y: number, z: number, itemName: string, count?: number, signal?: AbortSignal): Promise<string> {
+    const chest = await this.openChestAt(x, y, z, signal);
+    try {
+      const inChest = chest.containerItems().filter((i) => i.name === itemName);
+      if (inChest.length === 0) throw new ActionError(`no ${itemName} in that container`);
+      const want = count ?? inChest.reduce((s, i) => s + i.count, 0);
+      let moved = 0;
+      for (const it of inChest) {
+        const amount = Math.min(want - moved, it.count);
+        if (amount <= 0) break;
+        await chest.withdraw(it.type, null, amount);
+        moved += amount;
+      }
+      return `withdrew ${moved}x ${itemName}`;
+    } finally {
+      chest.close();
+    }
+  }
+
   inventory(): string {
     const items = this.bot.inventory.items();
     if (items.length === 0) return "inventory is empty";
@@ -244,6 +382,80 @@ export class Actions {
     return this.bot.nearestEntity(
       (e) => isCreature(e) && (e.name ?? "").toLowerCase().includes(want),
     );
+  }
+
+  /**
+   * Jump once and place a block against `ref` on `face` while airborne. The bot
+   * must rise ~1 block before the cell above `ref` (where its feet were) is
+   * clear enough to accept the block; jump is held so it keeps hopping and we
+   * retry each apex until placement succeeds, aborts, or times out.
+   */
+  private hopAndPlace(ref: Block, face: Vec3, signal?: AbortSignal): Promise<void> {
+    const bot = this.bot;
+    const startY = bot.entity.position.y;
+    return new Promise<void>((resolve, reject) => {
+      let placing = false;
+      let settled = false;
+
+      const finish = (err?: Error): void => {
+        if (settled) return;
+        settled = true;
+        bot.setControlState("jump", false);
+        bot.removeListener("physicsTick", onTick);
+        clearTimeout(timer);
+        if (signal) signal.removeEventListener("abort", onAbort);
+        if (err) reject(err);
+        else resolve();
+      };
+
+      const onAbort = (): void => finish(new ActionError("pillar aborted"));
+
+      const onTick = (): void => {
+        if (placing || settled) return;
+        // Place once the feet cell is clear (risen ~a full block). Jump apex is
+        // ~1.25, so there's a short window each hop.
+        if (bot.entity.position.y - startY >= 1.0) {
+          placing = true;
+          bot.placeBlock(ref, face).then(
+            () => finish(),
+            () => { placing = false; }, // missed this hop; retry on the next one
+          );
+        }
+      };
+
+      const timer = setTimeout(
+        () => finish(new ActionError("couldn't place block under feet (timed out hopping)")),
+        6000,
+      );
+
+      if (signal) {
+        if (signal.aborted) return finish(new ActionError("pillar aborted"));
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+      bot.on("physicsTick", onTick);
+      bot.setControlState("jump", true);
+    });
+  }
+
+  /** Navigate to and open a container block at coords. Caller must close it. */
+  private async openChestAt(x: number, y: number, z: number, signal?: AbortSignal) {
+    const target = new Vec3(x, y, z);
+    const block = this.bot.blockAt(target);
+    if (!block || !/chest|barrel|shulker|hopper|dispenser|dropper/.test(block.name)) {
+      throw new ActionError(`no container at (${x}, ${y}, ${z})`);
+    }
+    await this.ensureReach(target, signal, 3);
+    return this.bot.openContainer(block);
+  }
+
+  /** Equip the best available melee weapon (swords beat axes; better material wins). */
+  private async equipWeapon(): Promise<void> {
+    const weapons = this.bot.inventory
+      .items()
+      .filter((i) => i.name.endsWith("_sword") || i.name.endsWith("_axe"));
+    if (weapons.length === 0) return; // bare hands
+    weapons.sort((a, b) => weaponScore(b.name) - weaponScore(a.name));
+    await this.bot.equip(weapons[0], "hand").catch(() => {});
   }
 
   /** Walk until the position is within interaction reach. */
@@ -319,6 +531,22 @@ export function isCreature(e: Entity): boolean {
 
 function entityLabel(e: Entity): string {
   return e.username ?? e.displayName ?? e.name ?? "entity";
+}
+
+/** Rough melee desirability: weapon type weight + material tier. */
+function weaponScore(name: string): number {
+  const typeScore = name.endsWith("_sword") ? 10 : 0; // swords > axes for DPS/sweep
+  const mat = name.includes("netherite") ? 5
+    : name.includes("diamond") ? 4
+    : name.includes("iron") ? 3
+    : name.includes("stone") ? 2
+    : name.includes("golden") || name.includes("wooden") ? 1
+    : 0;
+  return typeScore + mat;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 function fmtVec(v: Vec3): string {

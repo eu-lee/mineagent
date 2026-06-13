@@ -6,7 +6,6 @@ import { ActionGate } from "../bot/action-gate.js";
 import { loadConfig } from "../config.js";
 
 const cfg = loadConfig();
-cfg.mcp.port = 0; // ephemeral port
 
 // Minimal stubs — tools/list only touches registration, not handlers.
 const deps = {
@@ -17,9 +16,9 @@ const deps = {
   cfg,
 } as unknown as McpDeps;
 
-const port = await startMcpServer(deps);
+const port = await startMcpServer(new Map([["probe", deps]]), 0); // ephemeral port
 
-const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+const res = await fetch(`http://127.0.0.1:${port}/mcp/probe`, {
   method: "POST",
   headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
   body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),

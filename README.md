@@ -34,29 +34,30 @@ on errors — successful skills accumulate into a library.
    powershell -File server\setup.ps1     # downloads Paper, accepts EULA
    powershell -File server\paper\start.ps1
    ```
-4. **Point Codex at the bot's MCP server** (streamable HTTP, validated on
-   codex-cli 0.139.0):
-   ```powershell
-   codex mcp add mineagent --url http://127.0.0.1:7654/mcp
-   ```
-   (`mcp.port` in `config.json` must match the URL.)
-5. **Run the agent**: `npm run dev` — the bot joins as `agent`; talk to it
-   in-game with `@agent <request>`.
+4. **Codex MCP wiring is automatic.** Each agent spawns its own
+   `codex app-server` pointed at its own route
+   (`http://127.0.0.1:<mcp.port>/mcp/<AgentName>`) via a `-c` config override, so
+   you do **not** need `codex mcp add`. (A stray global `mineagent` entry in
+   `~/.codex/config.toml` is harmless — it's overridden per agent.)
+5. **Run the agents**: `npm run dev` — spawns `agents.count` bots named
+   `Agent1..AgentN`; talk to each in-game with `@Agent1 <request>`, `@Agent2 …`.
    - For an Open-to-LAN world, pass the LAN port (and version if not the
      default) without editing `config.json`:
      ```powershell
      $env:MINEAGENT_PORT="NNNNN"; $env:MINEAGENT_VERSION="1.21.4"; npm run dev
      ```
-   - Env overrides: `MINEAGENT_PORT`, `MINEAGENT_HOST`, `MINEAGENT_VERSION`,
-     `MINEAGENT_USERNAME`.
+   - Env overrides: `MINEAGENT_PORT`, `MINEAGENT_HOST`, `MINEAGENT_VERSION`.
 
 ## Config (`config.json`)
 
 - `minecraft.auth`: `"offline"` for local dev; flip to `"microsoft"` to use a
   real account (device-code login, tokens cached). Only use on servers you own
   or have permission for — public-server anti-cheat may flag bot movement.
-- `chat.whitelist`: usernames allowed to command the bot. Empty = everyone (dev only!).
-- `mcp.port`: must match the URL in `~/.codex/config.toml`.
+- `agents.count`: how many identical bots to spawn (`Agent1..AgentN`);
+  `agents.namePrefix` changes the name stem; `agents.personality` is the shared
+  brief; `agents.model` overrides the model (null = codex default).
+- `chat.whitelist`: usernames allowed to command the bots. Empty = everyone (dev only!).
+- `mcp.port`: the local port the per-agent MCP routes are served on.
 
 ## Development
 

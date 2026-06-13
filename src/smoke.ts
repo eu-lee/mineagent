@@ -2,7 +2,7 @@
  * Scripted smoke test for Phase 2 primitives against a running local server.
  * Usage: npm run smoke   (server must be up; bot joins as <username>-smoke)
  */
-import { loadConfig } from "./config.js";
+import { loadConfig, agentNames } from "./config.js";
 import { AgentBot } from "./bot/agent-bot.js";
 import { Navigator } from "./bot/navigator.js";
 import { Actions } from "./bot/actions.js";
@@ -10,9 +10,7 @@ import { observe } from "./bot/observe.js";
 import { Vec3 } from "vec3";
 
 const cfg = loadConfig();
-cfg.minecraft.username = cfg.minecraft.username + "_smoke";
-
-const agent = new AgentBot(cfg);
+const agent = new AgentBot(cfg, `${agentNames(cfg)[0]}smoke`);
 await agent.start();
 const nav = new Navigator(agent.bot);
 const actions = new Actions(agent.bot, nav);
