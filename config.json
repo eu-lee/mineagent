@@ -1,0 +1,25 @@
+{
+  "minecraft": {
+    "host": "127.0.0.1",
+    "port": 25565,
+    "version": "1.21.4",
+    "username": "agent",
+    "auth": "offline"
+  },
+  "chat": {
+    "mention": "@agent",
+    "whitelist": [],
+    "maxChatLineLength": 240
+  },
+  "mcp": {
+    "port": 7654
+  },
+  "codex": {
+    "command": "codex",
+    "model": null,
+    "sandbox": "workspace-write"
+  },
+  "dev": {
+    "creativeGive": true
+  }
+}

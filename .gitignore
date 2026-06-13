@@ -1,0 +1,7 @@
+node_modules/
+dist/
+server/paper/
+*.log
+.env
+nmp-cache/
+.codex-proto/
