@@ -1,4 +1,5 @@
 import type { Bot } from "mineflayer";
+import type { Entity } from "prismarine-entity";
 import { Vec3 } from "vec3";
 import type { Actions } from "./actions.js";
 import type { Navigator } from "./navigator.js";
@@ -45,10 +46,12 @@ export class Survival {
   on(): void {
     this.active = true;
     if (!this.timer) this.timer = setInterval(() => void this.tick(), this.tickMs);
+    console.log(`[${this.bot.username}] survival ON`);
   }
 
   off(): void {
     this.active = false;
+    console.log(`[${this.bot.username}] survival OFF`);
   }
 
   stop(): void {
@@ -69,9 +72,12 @@ export class Survival {
       if (threat) {
         const dist = this.bot.entity.position.distanceTo(threat.position);
         if (health <= CRITICAL_HEALTH) {
+          console.log(`[${this.bot.username}] survival: FLEE ${threat.name} (hp ${Math.round(health)})`);
           await this.gate.preempt("survive: flee", (s) => this.flee(threat.position, s));
         } else if (dist <= ENGAGE_RANGE) {
-          await this.gate.preempt("survive: defend", (s) => this.actions.attackEntity(threat, s).then(() => {}));
+          console.log(`[${this.bot.username}] survival: DEFEND vs ${threat.name} @ ${dist.toFixed(1)}m (hp ${Math.round(health)})`);
+          // Bounded so each tick re-assesses (can switch to flee if hp drops).
+          await this.gate.preempt("survive: defend", (s) => this.defend(threat, s));
         }
       } else if (!this.gate.busyWith && (food <= REGEN_FOOD || health < 20) && this.hasFood()) {
         // Calm: top up only when idle so we don't interrupt real work.
@@ -81,6 +87,20 @@ export class Survival {
       // aborted / nothing to eat / can't path — try again next tick
     } finally {
       this.reacting = false;
+    }
+  }
+
+  /** Fight the threat for a short burst, then return so tick() can re-evaluate. */
+  private async defend(threat: Entity, signal: AbortSignal): Promise<void> {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 2_500);
+    const onOuter = () => ctrl.abort();
+    signal.addEventListener("abort", onOuter, { once: true });
+    try {
+      await this.actions.attackEntity(threat, ctrl.signal);
+    } finally {
+      clearTimeout(t);
+      signal.removeEventListener("abort", onOuter);
     }
   }
 
@@ -95,13 +115,14 @@ export class Survival {
     if (this.hasFood()) await this.actions.eat().catch(() => {});
   }
 
-  private nearestHostile() {
-    return this.bot.nearestEntity(
-      (e) =>
-        HOSTILE_NAMES.has(e.name ?? "") &&
-        e.position &&
-        e.position.distanceTo(this.bot.entity.position) <= DANGER_RADIUS,
-    );
+  private nearestHostile(): Entity | null {
+    const me = this.bot.entity.position;
+    return this.bot.nearestEntity((e) => {
+      if (!e.position || e.position.distanceTo(me) > DANGER_RADIUS) return false;
+      const name = (e.name ?? "").toLowerCase();
+      const kind = ((e as unknown as { kind?: string }).kind ?? "").toLowerCase();
+      return HOSTILE_NAMES.has(name) || e.type === "hostile" || kind.includes("hostile");
+    });
   }
 
   private hasFood(): boolean {

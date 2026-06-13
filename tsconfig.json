@@ -11,5 +11,7 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "skills/**/*.ts"]
+  "include": ["src/**/*.ts", "skills/**/*.ts"],
+  "//": "skills/generated/ is agent-written and transpiled by tsx at runtime; keep it out of our typecheck.",
+  "exclude": ["skills/generated/**"]
 }

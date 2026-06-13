@@ -36,13 +36,16 @@ export async function buildStructure(
   // the bot's current column so it doesn't leapfrog across the build.
   const ordered = orderForBuild(unique, bot.entity.position);
 
+  // Never /give in survival — gather materials legitimately instead.
+  const canGive = creativeGive && bot.game?.gameMode !== "survival";
+
   // Material check / top-up.
   const needed = new Map<string, number>();
   for (const p of ordered) needed.set(p.block, (needed.get(p.block) ?? 0) + 1);
   for (const [block, count] of needed) {
     const have = bot.inventory.items().filter((i) => i.name === block).reduce((s, i) => s + i.count, 0);
     if (have < count) {
-      if (creativeGive) {
+      if (canGive) {
         bot.chat(`/give ${bot.username} ${block} ${count - have}`);
         await sleep(500);
       } else {

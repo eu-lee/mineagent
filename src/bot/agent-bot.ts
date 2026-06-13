@@ -10,6 +10,7 @@ export interface ChatCommand {
 }
 
 export type ChatHandler = (cmd: ChatCommand) => void;
+export type DeathHandler = () => void;
 
 /**
  * Wraps the mineflayer bot: connection, auto-reconnect, chat listening.
@@ -20,6 +21,7 @@ export class AgentBot {
   readonly username: string;
   private cfg: Config;
   private chatHandlers: ChatHandler[] = [];
+  private deathHandlers: DeathHandler[] = [];
   private stopped = false;
   private reconnectDelayMs = 3_000;
 
@@ -41,10 +43,32 @@ export class AgentBot {
     this.chatHandlers.push(handler);
   }
 
-  /** Send a chat message, split to fit server line-length limits. */
+  /** Fires after the bot dies AND has respawned (so it's alive and ready again). */
+  onDeath(handler: DeathHandler): void {
+    this.deathHandlers.push(handler);
+  }
+
+  private recentSaid: { text: string; at: number }[] = [];
+
+  /** Send a chat message, split to fit server line-length limits. Suppresses
+   *  duplicates within a short window (the brain often both calls the `chat`
+   *  tool and repeats itself in its final message). */
   say(message: string): void {
+    const norm = message.trim();
+    if (!norm) return;
+
+    // In survival, never run slash/server commands (no cheating with /give etc.).
+    if (norm.startsWith("/") && this.bot?.game?.gameMode === "survival") {
+      console.warn(`[${this.username}] blocked slash command in survival: ${norm.slice(0, 60)}`);
+      return;
+    }
+    const now = Date.now();
+    this.recentSaid = this.recentSaid.filter((r) => now - r.at < 8_000);
+    if (this.recentSaid.some((r) => r.text === norm)) return;
+    this.recentSaid.push({ text: norm, at: now });
+
     const max = this.cfg.chat.maxChatLineLength;
-    for (const line of message.split("\n")) {
+    for (const line of norm.split("\n")) {
       for (let i = 0; i < line.length; i += max) {
         this.bot.chat(line.slice(i, i + max));
       }
@@ -67,6 +91,19 @@ export class AgentBot {
     bot.on("chat", (username, message) => {
       if (username === bot.username) return;
       for (const h of this.chatHandlers) h({ username, message });
+    });
+
+    // Death → respawn: fire death handlers once the bot is alive again.
+    let pendingRespawn = false;
+    bot.on("death", () => {
+      pendingRespawn = true;
+      console.log(`[bot] ${this.username} died`);
+    });
+    bot.on("spawn", () => {
+      if (!pendingRespawn) return; // initial spawn, not a respawn
+      pendingRespawn = false;
+      console.log(`[bot] ${this.username} respawned`);
+      for (const h of this.deathHandlers) h();
     });
 
     bot.on("kicked", (reason) => console.error("[bot] kicked:", reason));

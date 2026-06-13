@@ -440,48 +440,69 @@ export class Actions {
    */
   private hopAndPlace(ref: Block, face: Vec3, signal?: AbortSignal): Promise<void> {
     const bot = this.bot;
-    const startY = bot.entity.position.y;
     return new Promise<void>((resolve, reject) => {
-      let placing = false;
       let settled = false;
+      let attempts = 0;
+      let jumping = false;
+      let startY = bot.entity.position.y;
+      let prevDy = -1;
 
       const finish = (err?: Error): void => {
         if (settled) return;
         settled = true;
         bot.setControlState("jump", false);
-        bot.removeListener("physicsTick", onTick);
+        bot.removeListener("physicsTick", tick);
         clearTimeout(timer);
         if (signal) signal.removeEventListener("abort", onAbort);
         if (err) reject(err);
         else resolve();
       };
-
       const onAbort = (): void => finish(new ActionError("pillar aborted"));
 
-      const onTick = (): void => {
-        if (placing || settled) return;
-        // Place once the feet cell is clear (risen ~a full block). Jump apex is
-        // ~1.25, so there's a short window each hop.
-        if (bot.entity.position.y - startY >= 1.0) {
-          placing = true;
-          bot.placeBlock(ref, face).then(
-            () => finish(),
-            () => { placing = false; }, // missed this hop; retry on the next one
-          );
+      const onTick = async (): Promise<void> => {
+        if (settled) return;
+        if (!jumping) {
+          // Begin a hop.
+          startY = bot.entity.position.y;
+          prevDy = -1;
+          jumping = true;
+          bot.setControlState("jump", true);
+          return;
         }
+        const dy = bot.entity.position.y - startY;
+        // Place at the APEX (cell maximally clear): risen ≥1 block and no longer
+        // ascending. Placing too early fails AND blocks ~5s on bot.placeBlock's
+        // internal timeout, so hitting the apex is what makes this reliable.
+        if (dy >= 1.0 && dy <= prevDy) {
+          bot.removeListener("physicsTick", tick); // pause while we place
+          bot.setControlState("jump", false);
+          try {
+            await bot.placeBlock(ref, face);
+            finish();
+          } catch {
+            if (++attempts >= 5) {
+              finish(new ActionError("couldn't place block under feet after several hops"));
+              return;
+            }
+            jumping = false; // try another hop
+            if (!settled) bot.on("physicsTick", tick);
+          }
+          return;
+        }
+        prevDy = dy;
       };
+      const tick = (): void => void onTick();
 
       const timer = setTimeout(
-        () => finish(new ActionError("couldn't place block under feet (timed out hopping)")),
-        6000,
+        () => finish(new ActionError("couldn't place block under feet (timed out)")),
+        12_000,
       );
 
       if (signal) {
         if (signal.aborted) return finish(new ActionError("pillar aborted"));
         signal.addEventListener("abort", onAbort, { once: true });
       }
-      bot.on("physicsTick", onTick);
-      bot.setControlState("jump", true);
+      bot.on("physicsTick", tick);
     });
   }
 

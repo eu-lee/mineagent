@@ -26,6 +26,8 @@ export type SkillModule = {
 };
 
 const SKILLS_DIR = path.join(repoRoot, "skills");
+/** Where agents write their own skills (kept out of the curated skills/ root). */
+const GENERATED_DIR = path.join(SKILLS_DIR, "generated");
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
 export interface SkillRunResult {
@@ -49,9 +51,12 @@ export async function runSkill(
   const safe = /^[\w-]+$/.test(name);
   if (!safe) return { ok: false, output: `invalid skill name "${name}" (use [a-zA-Z0-9_-])` };
 
-  const file = path.join(SKILLS_DIR, `${name}.ts`);
+  // Prefer the agent-writable generated/ folder; fall back to curated skills/.
+  const genFile = path.join(GENERATED_DIR, `${name}.ts`);
+  const rootFile = path.join(SKILLS_DIR, `${name}.ts`);
+  const file = existsSync(genFile) ? genFile : rootFile;
   if (!existsSync(file)) {
-    return { ok: false, output: `skill file not found: skills/${name}.ts` };
+    return { ok: false, output: `skill file not found: skills/generated/${name}.ts` };
   }
 
   let mod: SkillModule;

@@ -47,6 +47,10 @@ export class Navigator {
     this.digMovements = new Movements(bot);
     this.digMovements.canDig = true;
     this.digMovements.allowSprinting = true;
+    // Make breaking blocks costly so the bot routes AROUND walls/builds when a
+    // reasonable detour exists, but still tunnels through when it's genuinely
+    // blocked or the way around is far longer than digging.
+    this.digMovements.digCost = 32;
 
     this.surfaceMovements = new Movements(bot);
     this.surfaceMovements.canDig = false;

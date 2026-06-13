@@ -30,6 +30,9 @@ export class Orchestrator {
   private otherAgents: Set<string>; // lowercased usernames to ignore
   private survival: Survival;
   private sessions = new Map<string, Session>(); // per player
+  /** The task currently being executed, so we can resume it after a death. */
+  private activeTask: { username: string; request: string } | null = null;
+  private deathResumes = 0;
 
   constructor(
     cfg: Config,
@@ -61,6 +64,38 @@ export class Orchestrator {
         this.agent.say(`${username}: something went wrong (${err instanceof Error ? err.message : err})`);
       });
     });
+
+    this.agent.onDeath(() => void this.onRespawn());
+  }
+
+  /** After dying and respawning, drop the broken action and resume the task. */
+  private async onRespawn(): Promise<void> {
+    const task = this.activeTask;
+    if (!task) return;
+
+    // Stop the stale action/turn left over from before death.
+    this.nav.stop();
+    this.gate.stop();
+    const session = this.sessions.get(task.username);
+    if (!session) return;
+    if (session.turnActive) await this.codex.interrupt(session.threadId).catch(() => {});
+
+    if (++this.deathResumes > 3) {
+      this.activeTask = null;
+      this.deathResumes = 0;
+      session.turnActive = false;
+      this.agent.say(`I keep dying trying that — giving up for now.`);
+      return;
+    }
+
+    await new Promise((r) => setTimeout(r, 800)); // let the interrupt settle
+    session.turnActive = true;
+    session.lastUsed = Date.now();
+    console.log(`[${this.agent.username}] resuming after death (try ${this.deathResumes}): ${task.request}`);
+    await this.codex.sendUserMessage(
+      session.threadId,
+      this.framePlayerMessage(task.username, task.request, "you just DIED and respawned — resume this task from your current state"),
+    );
   }
 
   private async onChat(username: string, message: string): Promise<void> {
@@ -104,6 +139,8 @@ export class Orchestrator {
     // Fast path: stop aborts the current action AND interrupts the turn.
     if (/^(stop|halt|cancel|abort)[.!]?$/i.test(request)) {
       const wasBusy = this.gate.busyWith;
+      this.activeTask = null; // explicit stop cancels any death-resume
+      this.deathResumes = 0;
       this.nav.stop();
       this.gate.stop();
       const session = this.sessions.get(username);
@@ -138,6 +175,8 @@ export class Orchestrator {
 
     session.turnActive = true;
     session.lastUsed = Date.now();
+    this.activeTask = { username, request };
+    this.deathResumes = 0;
     console.log(`[${this.agent.username}] <${username}> ${request}`);
 
     await this.codex.sendUserMessage(
@@ -170,11 +209,14 @@ export class Orchestrator {
       case "turn_complete": {
         session.session.turnActive = false;
         session.session.lastUsed = Date.now();
+        this.activeTask = null; // finished cleanly — nothing to resume
+        this.deathResumes = 0;
         break;
       }
       case "error": {
         console.error(`[${this.agent.username}] codex error:`, msg);
         session.session.turnActive = false;
+        this.activeTask = null;
         this.agent.say(`brain error: ${(msg.message as string) ?? "unknown"}`);
         break;
       }

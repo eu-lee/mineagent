@@ -21,7 +21,7 @@
   },
   "codex": {
     "command": "codex",
-    "sandbox": "workspace-write"
+    "sandbox": "danger-full-access"
   },
   "dev": {
     "creativeGive": true

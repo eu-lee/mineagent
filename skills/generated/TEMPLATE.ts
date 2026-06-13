@@ -29,7 +29,7 @@
  *        line(from,to,block)
  *    Build on the ground/with support — fully floating shapes can't be placed.
  */
-import type { SkillContext } from "../src/skills/runtime.js";
+import type { SkillContext } from "../../src/skills/runtime.js";
 
 export async function run(ctx: SkillContext): Promise<string> {
   ctx.log("template skill: doing nothing");
