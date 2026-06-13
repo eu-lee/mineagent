@@ -3,6 +3,7 @@ import type { AgentBot } from "./bot/agent-bot.js";
 import type { ActionGate } from "./bot/action-gate.js";
 import type { Navigator } from "./bot/navigator.js";
 import { observe } from "./bot/observe.js";
+import type { Survival } from "./bot/survival.js";
 import { CodexAppServerClient } from "./codex/app-server-client.js";
 
 const SESSION_IDLE_MS = 15 * 60_000;
@@ -27,6 +28,7 @@ export class Orchestrator {
   private nav: Navigator;
   private mention: string; // "@<name>" lowercased
   private otherAgents: Set<string>; // lowercased usernames to ignore
+  private survival: Survival;
   private sessions = new Map<string, Session>(); // per player
 
   constructor(
@@ -36,6 +38,7 @@ export class Orchestrator {
     gate: ActionGate,
     nav: Navigator,
     otherAgents: Set<string>,
+    survival: Survival,
   ) {
     this.cfg = cfg;
     this.agent = agent;
@@ -44,6 +47,7 @@ export class Orchestrator {
     this.nav = nav;
     this.mention = `@${agent.username.toLowerCase()}`;
     this.otherAgents = otherAgents;
+    this.survival = survival;
   }
 
   start(): void {
@@ -63,7 +67,14 @@ export class Orchestrator {
     // Ignore the other agent bots so they don't take orders from each other.
     if (this.otherAgents.has(username.toLowerCase())) return;
 
-    if (!message.toLowerCase().startsWith(this.mention)) return;
+    // Accept messages addressed to this agent (@name) or to all agents
+    // (@everyone). Every bot hears the chat, so each runs its @everyone copy.
+    const lower = message.toLowerCase();
+    const EVERYONE = "@everyone";
+    let prefix: string;
+    if (lower.startsWith(EVERYONE)) prefix = EVERYONE;
+    else if (lower.startsWith(this.mention)) prefix = this.mention;
+    else return;
 
     const whitelist = this.cfg.chat.whitelist;
     if (whitelist.length > 0 && !whitelist.includes(username)) {
@@ -71,9 +82,22 @@ export class Orchestrator {
       return;
     }
 
-    const request = message.slice(this.mention.length).trim();
+    const request = message.slice(prefix.length).trim();
     if (!request) {
       this.agent.say(`${username}: yes? (say "@${this.agent.username} <what you want>")`);
+      return;
+    }
+
+    // Fast path: toggle the background survival reflex (runs concurrently).
+    const surviveMatch = /^survive\s+(on|off)$/i.exec(request);
+    if (surviveMatch) {
+      if (surviveMatch[1].toLowerCase() === "on") {
+        this.survival.on();
+        this.agent.say("survival on — I'll defend, flee, and heal while I work.");
+      } else {
+        this.survival.off();
+        this.agent.say("survival off.");
+      }
       return;
     }
 

@@ -9,7 +9,8 @@
     "count": 3,
     "namePrefix": "Agent",
     "personality": "You are a friendly, capable Minecraft companion. You help players build, gather, fight, and explore. Keep chat replies short.",
-    "model": null
+    "model": "gpt-5.4-mini",
+    "autoEat": true
   },
   "chat": {
     "whitelist": [],

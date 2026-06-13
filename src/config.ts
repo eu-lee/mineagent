@@ -19,6 +19,8 @@ const ConfigSchema = z.object({
     personality: z.string(),
     /** Model for the agents (null = codex CLI default). */
     model: z.string().nullable(),
+    /** Auto-eat when hungry so health regenerates (default true). */
+    autoEat: z.boolean().optional(),
   }),
   chat: z.object({
     /** Empty list = anyone may command the bots (dev only). */

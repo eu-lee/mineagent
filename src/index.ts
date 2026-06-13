@@ -3,6 +3,8 @@ import { AgentBot } from "./bot/agent-bot.js";
 import { Navigator } from "./bot/navigator.js";
 import { Actions } from "./bot/actions.js";
 import { ActionGate } from "./bot/action-gate.js";
+import { AutoEater } from "./bot/auto-eat.js";
+import { Survival } from "./bot/survival.js";
 import { startMcpServer, type McpDeps } from "./mcp/server.js";
 import { CodexAppServerClient } from "./codex/app-server-client.js";
 import { Orchestrator } from "./orchestrator.js";
@@ -18,6 +20,7 @@ interface AgentStack {
   actions: Actions;
   gate: ActionGate;
   codex: CodexAppServerClient;
+  survival: Survival;
 }
 
 // --- Build each agent's bot + action layer; collect MCP deps per agent ---
@@ -46,8 +49,12 @@ for (const name of names) {
     ].join("\n\n"),
   });
 
+  const survival = new Survival(bot.bot, actions, nav, gate);
+
   mcpDeps.set(name, { agent: bot, actions, nav, gate, cfg });
-  stacks.push({ name, bot, nav, actions, gate, codex });
+  stacks.push({ name, bot, nav, actions, gate, codex, survival });
+
+  if (cfg.agents.autoEat ?? true) new AutoEater(bot.bot, actions, gate).start();
 }
 
 // --- One MCP server hosting a route per agent ---
@@ -61,7 +68,7 @@ await Promise.allSettled(
     try {
       console.log(`[mineagent] ${s.name}: starting codex app-server...`);
       await s.codex.start();
-      const orchestrator = new Orchestrator(cfg, s.bot, s.codex, s.gate, s.nav, others);
+      const orchestrator = new Orchestrator(cfg, s.bot, s.codex, s.gate, s.nav, others, s.survival);
       orchestrator.start();
       console.log(`[mineagent] ${s.name} READY — say "@${s.name} <request>" in chat`);
     } catch (err) {
@@ -79,6 +86,7 @@ console.log(`[mineagent] startup complete — ${stacks.length} agent(s): ${names
 
 process.on("SIGINT", () => {
   for (const s of stacks) {
+    s.survival.stop();
     s.codex.stop();
     s.bot.stop();
   }

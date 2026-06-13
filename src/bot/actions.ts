@@ -54,18 +54,28 @@ export class Actions {
   }
 
   /**
-   * Attack a nearby creature by name until it dies (or the signal aborts).
-   * Approaches into melee reach, equips the best weapon, then swings on the
-   * attack cooldown, re-approaching as the target flees. Pass "nearest" to
-   * target the closest creature.
+   * Attack a target until it dies (or the signal aborts). The target may be a
+   * mob/animal by name, another player/agent by username, "nearest" (closest
+   * creature), or "nearest player". Approaches into melee reach, equips the
+   * best weapon, then swings on the attack cooldown, re-approaching as it flees.
    */
   async attack(name: string, signal?: AbortSignal): Promise<string> {
-    const wantNearest = /^(nearest|closest|any)$/i.test(name.trim());
-    const target = wantNearest
-      ? this.bot.nearestEntity((e) => isCreature(e))
-      : this.findEntity(name);
-    if (!target) throw new ActionError(`no ${wantNearest ? "creature" : name} to attack nearby`);
+    const t = name.trim().toLowerCase();
+    let target;
+    if (/^(nearest|closest|any) ?player$/.test(t)) {
+      target = this.bot.nearestEntity((e) => e.type === "player");
+    } else if (/^(nearest|closest|any)( ?creature| ?mob)?$/.test(t)) {
+      target = this.bot.nearestEntity((e) => isCreature(e));
+    } else {
+      // A mob by name, or a player/agent by username.
+      target = this.findEntity(name) ?? this.findPlayerEntity(name);
+    }
+    if (!target) throw new ActionError(`no "${name}" to attack nearby`);
+    return this.attackEntity(target, signal);
+  }
 
+  /** Fight a specific entity to the death (or until aborted). Used by attack() and survival. */
+  async attackEntity(target: Entity, signal?: AbortSignal): Promise<string> {
     const label = entityLabel(target);
     await this.equipWeapon();
 
@@ -351,6 +361,36 @@ export class Actions {
     }
   }
 
+  /**
+   * Eat food to restore hunger (health then regenerates passively). With no
+   * item name, eats the best non-harmful food in inventory; already-full does
+   * nothing. Returns the resulting food/health.
+   */
+  async eat(itemName?: string): Promise<string> {
+    if ((this.bot.food ?? 20) >= 20 && !itemName) return `not hungry (food ${this.bot.food}/20)`;
+    const food = itemName
+      ? this.bot.inventory.items().find((i) => i.name === itemName)
+      : this.bestFood();
+    if (!food) throw new ActionError(itemName ? `no ${itemName} in inventory` : "no food in inventory to eat");
+
+    await this.bot.equip(food, "hand");
+    try {
+      await this.bot.consume();
+    } catch (err) {
+      throw new ActionError(`couldn't eat ${food.name}: ${err instanceof Error ? err.message : err}`);
+    }
+    return `ate ${food.name} — food ${this.bot.food}/20, health ${Math.round(this.bot.health ?? 0)}/20`;
+  }
+
+  /** Highest-nutrition non-harmful, non-precious food in inventory (for auto-eat). */
+  private bestFood() {
+    const foods = this.bot.registry.foods as Record<number, { foodPoints: number; saturation: number }>;
+    const candidates = this.bot.inventory.items().filter((i) => foods[i.type] && !SKIP_AUTO_FOODS.has(i.name));
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => foods[b.type].foodPoints - foods[a.type].foodPoints);
+    return candidates[0];
+  }
+
   inventory(): string {
     const items = this.bot.inventory.items();
     if (items.length === 0) return "inventory is empty";
@@ -382,6 +422,14 @@ export class Actions {
     return this.bot.nearestEntity(
       (e) => isCreature(e) && (e.name ?? "").toLowerCase().includes(want),
     );
+  }
+
+  /** A player/agent's entity by username (case-insensitive), if in range. */
+  findPlayerEntity(name: string): Entity | null {
+    const direct = this.bot.players[name]?.entity;
+    if (direct) return direct;
+    const key = Object.keys(this.bot.players).find((u) => u.toLowerCase() === name.toLowerCase());
+    return (key && this.bot.players[key]?.entity) || null;
   }
 
   /**
@@ -511,6 +559,12 @@ function armorSlot(name: string): "head" | "torso" | "legs" | "feet" | null {
   if (/boots/.test(name)) return "feet";
   return null;
 }
+
+/** Foods auto-eat / "best food" should avoid: poisonous, or too precious to burn. */
+const SKIP_AUTO_FOODS = new Set([
+  "rotten_flesh", "spider_eye", "poisonous_potato", "pufferfish", "chorus_fruit",
+  "suspicious_stew", "golden_apple", "enchanted_golden_apple",
+]);
 
 /** Entity categories that count as a living creature you can walk up to. */
 const CREATURE_TYPES = new Set([

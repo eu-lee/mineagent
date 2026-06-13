@@ -111,8 +111,8 @@ function buildServer(deps: McpDeps): McpServer {
     "attack",
     {
       description:
-        "Attack a nearby creature by name until it dies (or you stop). Approaches, equips the best weapon, and swings. E.g. attack 'zombie' to fight, 'pig' to hunt for food, or 'nearest' for the closest mob.",
-      inputSchema: { target: z.string().describe("mob name e.g. 'zombie', 'cow', or 'nearest'") },
+        "Attack a target until it dies (or you stop). Approaches, equips the best weapon, and swings. Target can be a mob ('zombie', 'pig'), another agent/player by name ('Agent2'), 'nearest' (closest mob), or 'nearest player'.",
+      inputSchema: { target: z.string().describe("'zombie' | 'cow' | an agent/player name like 'Agent2' | 'nearest' | 'nearest player'") },
     },
     async ({ target }) => action(deps, `attack ${target}`, (s) => actions.attack(target, s))(),
   );
@@ -202,6 +202,16 @@ function buildServer(deps: McpDeps): McpServer {
         return fail(err);
       }
     },
+  );
+
+  server.registerTool(
+    "eat",
+    {
+      description:
+        "Eat food to restore hunger so health can regenerate. Omit `item` to eat the best food you have. (Agents also auto-eat when hungry.)",
+      inputSchema: { item: z.string().optional().describe("specific food, e.g. 'cooked_beef'; omit for best") },
+    },
+    async ({ item }) => action(deps, "eat", () => actions.eat(item))(),
   );
 
   server.registerTool(
